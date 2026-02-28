@@ -53,7 +53,6 @@ class LocationProvider with ChangeNotifier {
     _allRecords = recordsJson
         .map((json) => LocationRecord.fromJson(jsonDecode(json)))
         .toList();
-    // Initially, show all records unfiltered.
     _filterRecordsByDate(null);
     notifyListeners();
   }
@@ -97,7 +96,7 @@ class LocationProvider with ChangeNotifier {
   void _filterRecordsByDate(DateTime? date) {
     _selectedDate = date;
     if (_selectedDate == null) {
-       _filteredRecords = List.from(_allRecords);
+      _filteredRecords = List.from(_allRecords);
     } else {
       final selected = _selectedDate!;
       _filteredRecords = _allRecords
@@ -114,16 +113,21 @@ class SettingsProvider with ChangeNotifier {
   Locale _locale = const Locale('en');
   bool _inactivityTimeoutEnabled = true;
   bool _recordOnForegroundEnabled = true;
+  int _gpsPrecision = 6;
 
   Locale get locale => _locale;
   bool get inactivityTimeoutEnabled => _inactivityTimeoutEnabled;
   bool get recordOnForegroundEnabled => _recordOnForegroundEnabled;
+  int get gpsPrecision => _gpsPrecision;
 
   Future<void> loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     _locale = Locale(prefs.getString('languageCode') ?? 'en');
-    _inactivityTimeoutEnabled = prefs.getBool('inactivityTimeoutEnabled') ?? true;
-    _recordOnForegroundEnabled = prefs.getBool('recordOnForegroundEnabled') ?? true;
+    _inactivityTimeoutEnabled =
+        prefs.getBool('inactivityTimeoutEnabled') ?? true;
+    _recordOnForegroundEnabled =
+        prefs.getBool('recordOnForegroundEnabled') ?? true;
+    _gpsPrecision = prefs.getInt('gpsPrecision') ?? 6;
     notifyListeners();
   }
 
@@ -147,8 +151,14 @@ class SettingsProvider with ChangeNotifier {
     await prefs.setBool('recordOnForegroundEnabled', enabled);
     notifyListeners();
   }
-}
 
+  Future<void> setGpsPrecision(int precision) async {
+    _gpsPrecision = precision;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('gpsPrecision', precision);
+    notifyListeners();
+  }
+}
 
 // --- Widgets ---
 
@@ -174,7 +184,9 @@ class LocationCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final settings = Provider.of<SettingsProvider>(context);
-    final dateFormat = DateFormat('MMM d, yyyy - hh:mm:ss a', settings.locale.languageCode);
+    final dateFormat =
+        DateFormat('MMM d, yyyy - hh:mm:ss a', settings.locale.languageCode);
+    final precision = settings.gpsPrecision;
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
@@ -184,8 +196,8 @@ class LocationCard extends StatelessWidget {
         ),
         title: Text(dateFormat.format(record.timestamp)),
         subtitle: Text(settings.locale.languageCode == 'zh'
-            ? '纬度: ${record.latitude.toStringAsFixed(4)}, 经度: ${record.longitude.toStringAsFixed(4)}'
-            : 'Lat: ${record.latitude.toStringAsFixed(4)}, Lon: ${record.longitude.toStringAsFixed(4)}'),
+            ? '纬度: ${record.latitude.toStringAsFixed(precision)}, 经度: ${record.longitude.toStringAsFixed(precision)}'
+            : 'Lat: ${record.latitude.toStringAsFixed(precision)}, Lon: ${record.longitude.toStringAsFixed(precision)}'),
         onTap: () => _launchMap(context, settings.locale),
       ),
     );
@@ -197,19 +209,24 @@ class LocationCard extends StatelessWidget {
 
     if (Platform.isAndroid && locale.languageCode == 'zh') {
       try {
+        final poiname = Uri.encodeComponent('我的位置');
         final intent = AndroidIntent(
           action: 'action_view',
-          data: Uri.parse('androidamap://viewMap?sourceApplication=location_tracker&poiname=My Location&lat=$lat&lon=$lon&dev=1').toString(),
+          data: Uri.parse(
+                  'androidamap://viewMap?sourceApplication=location_tracker&poiname=$poiname&lat=$lat&lon=$lon&dev=1')
+              .toString(),
           package: 'com.autonavi.minimap',
         );
         await intent.launch();
       } catch (e) {
         // Fallback to browser if Amap is not installed or launch fails
-        final fallbackUrl = Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lon');
+        final fallbackUrl =
+            Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lon');
         await launchUrl(fallbackUrl, mode: LaunchMode.externalApplication);
       }
     } else {
-      final url = Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lon');
+      final url =
+          Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lon');
       await launchUrl(url, mode: LaunchMode.externalApplication);
     }
   }
@@ -235,10 +252,11 @@ class HomeScreenState extends State<HomeScreen> {
     if (settingsProvider.inactivityTimeoutEnabled) {
       _armAndStartExitTimer();
     }
-    
+
     _lifecycleObserver = AppLifecycleObserver(
       onResumed: () {
-        if (Provider.of<SettingsProvider>(context, listen: false).recordOnForegroundEnabled) {
+        if (Provider.of<SettingsProvider>(context, listen: false)
+            .recordOnForegroundEnabled) {
           _recordLocation();
         }
       },
@@ -271,11 +289,11 @@ class HomeScreenState extends State<HomeScreen> {
     _exitTimer?.cancel();
     _isExitTimerArmed = false;
   }
-  
+
   void _handleUserInteraction([_]) {
-      if (_isExitTimerArmed) {
-        _disarmAndCancelExitTimer();
-      }
+    if (_isExitTimerArmed) {
+      _disarmAndCancelExitTimer();
+    }
   }
 
   Future<void> _recordLocation() async {
@@ -283,26 +301,29 @@ class HomeScreenState extends State<HomeScreen> {
     if (!mounted || !hasPermission) return;
 
     try {
-      final position = await Geolocator.getCurrentPosition(locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
+      final position = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
       if (mounted) {
         Provider.of<LocationProvider>(context, listen: false).addRecord(position);
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error getting location: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Error getting location: $e')));
       }
     }
   }
 
   Future<bool> _handleLocationPermission() async {
-    bool serviceEnabled; 
+    bool serviceEnabled;
     LocationPermission permission;
 
     serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Location services are disabled. Please enable the services')));
+            content: Text(
+                'Location services are disabled. Please enable the services')));
       }
       return false;
     }
@@ -320,7 +341,8 @@ class HomeScreenState extends State<HomeScreen> {
     if (permission == LocationPermission.deniedForever) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Location permissions are permanently denied, we cannot request permissions.')));
+            content: Text(
+                'Location permissions are permanently denied, we cannot request permissions.')));
       }
       return false;
     }
@@ -339,12 +361,9 @@ class HomeScreenState extends State<HomeScreen> {
       locale: settingsProvider.locale,
     );
 
-    // If a date is picked, filter by it. If user cancels, picked is null.
-    // A null date in selectDate means 'show all'.
     if (picked != null) {
       locationProvider.selectDate(picked);
     } else {
-      // If user cancels the date picker, show all records.
       locationProvider.selectDate(null);
     }
   }
@@ -360,19 +379,31 @@ class HomeScreenState extends State<HomeScreen> {
             return Wrap(
               children: [
                 SwitchListTile(
-                  title: Text(settings.locale.languageCode == 'zh' ? '10秒无操作自动退出' : 'Auto-exit after 10s inactivity'),
+                    title: Text(settings.locale.languageCode == 'zh'
+                        ? '高精度GPS (6位小数)'
+                        : 'High Precision GPS (6 decimals)'),
+                    value: settings.gpsPrecision == 6,
+                    onChanged: (bool value) {
+                      settings.setGpsPrecision(value ? 6 : 5);
+                    }),
+                SwitchListTile(
+                  title: Text(settings.locale.languageCode == 'zh'
+                      ? '10秒无操作自动退出'
+                      : 'Auto-exit after 10s inactivity'),
                   value: settings.inactivityTimeoutEnabled,
                   onChanged: (bool value) {
                     settings.setInactivityTimeoutEnabled(value);
-                    if(value) {
-                        _armAndStartExitTimer();
+                    if (value) {
+                      _armAndStartExitTimer();
                     } else {
-                        _disarmAndCancelExitTimer();
+                      _disarmAndCancelExitTimer();
                     }
                   },
                 ),
                 SwitchListTile(
-                  title: Text(settings.locale.languageCode == 'zh' ? '回到前台自动记录' : 'Record location on app resume'),
+                  title: Text(settings.locale.languageCode == 'zh'
+                      ? '回到前台自动记录'
+                      : 'Record location on app resume'),
                   value: settings.recordOnForegroundEnabled,
                   onChanged: (bool value) {
                     settings.setRecordOnForegroundEnabled(value);
@@ -385,7 +416,6 @@ class HomeScreenState extends State<HomeScreen> {
       },
     );
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -414,13 +444,14 @@ class HomeScreenState extends State<HomeScreen> {
               },
             ),
             IconButton(
-                icon: const Icon(Icons.settings),
-                onPressed: () => _showSettingsModal(context),
+              icon: const Icon(Icons.settings),
+              onPressed: () => _showSettingsModal(context),
             ),
             IconButton(
               icon: const Icon(Icons.delete),
               onPressed: () {
-                Provider.of<LocationProvider>(context, listen: false).clearRecords();
+                Provider.of<LocationProvider>(context, listen: false)
+                    .clearRecords();
               },
             ),
           ],
@@ -494,11 +525,12 @@ class MyApp extends StatelessWidget {
 
   ThemeData _buildTheme(Brightness brightness) {
     final baseTheme = ThemeData(brightness: brightness);
-    final textColor = brightness == Brightness.light ? Colors.black : Colors.white;
+    final textColor =
+        brightness == Brightness.light ? Colors.black : Colors.white;
 
     return baseTheme.copyWith(
-      textTheme:
-          GoogleFonts.latoTextTheme(baseTheme.textTheme).apply(bodyColor: textColor),
+      textTheme: GoogleFonts.latoTextTheme(baseTheme.textTheme)
+          .apply(bodyColor: textColor),
       appBarTheme: AppBarTheme(
         titleTextStyle: GoogleFonts.oswald(
           fontSize: 24,
