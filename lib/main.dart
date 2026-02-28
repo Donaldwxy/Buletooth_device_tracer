@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:android_intent_plus/android_intent.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
@@ -18,9 +20,7 @@ class LocationRecord {
   final DateTime timestamp;
 
   LocationRecord(
-      {required this.latitude,
-      required this.longitude,
-      required this.timestamp});
+      {required this.latitude, required this.longitude, required this.timestamp});
 
   Map<String, dynamic> toJson() => {
         'latitude': latitude,
@@ -53,7 +53,6 @@ class LocationProvider with ChangeNotifier {
     _allRecords = recordsJson
         .map((json) => LocationRecord.fromJson(jsonDecode(json)))
         .toList();
-    // Initially, show all records
     _filteredRecords = List.from(_allRecords);
     notifyListeners();
   }
@@ -64,34 +63,29 @@ class LocationProvider with ChangeNotifier {
       longitude: position.longitude,
       timestamp: DateTime.now(),
     );
-    // 1. Add to in-memory list
     _allRecords.add(record);
-
-    // 2. Incrementally update storage
-    final prefs = await SharedPreferences.getInstance();
-    final newRecordJson = jsonEncode(record.toJson());
-    final existingRecords = prefs.getStringList('location_records') ?? [];
-    existingRecords.add(newRecordJson);
-    await prefs.setStringList('location_records', existingRecords);
-
-    // 3. Update UI
+    _updateStorageIncrementally(record);
     _filterRecordsByDate();
     notifyListeners();
+  }
+
+  Future<void> _updateStorageIncrementally(LocationRecord record) async {
+    final prefs = await SharedPreferences.getInstance();
+    final recordsJson = prefs.getStringList('location_records') ?? [];
+    recordsJson.add(jsonEncode(record.toJson()));
+    await prefs.setStringList('location_records', recordsJson);
   }
 
   Future<void> clearRecords() async {
     _allRecords.clear();
     _filteredRecords.clear();
-    await _saveRecords(); // Overwrite with empty list
+    await _saveRecords();
     notifyListeners();
   }
 
-  // Full overwrite, only used for clearing records now
   Future<void> _saveRecords() async {
     final prefs = await SharedPreferences.getInstance();
-    final recordsJson =
-        _allRecords.map((record) => jsonEncode(record.toJson())).toList();
-    await prefs.setStringList('location_records', recordsJson);
+    await prefs.setStringList('location_records', []);
   }
 
   void selectDate(DateTime? date) {
@@ -117,13 +111,18 @@ class LocationProvider with ChangeNotifier {
 
 class SettingsProvider with ChangeNotifier {
   Locale _locale = const Locale('en');
+  bool _inactivityTimeoutEnabled = true;
+  bool _recordOnForegroundEnabled = true;
 
   Locale get locale => _locale;
+  bool get inactivityTimeoutEnabled => _inactivityTimeoutEnabled;
+  bool get recordOnForegroundEnabled => _recordOnForegroundEnabled;
 
   Future<void> loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    final languageCode = prefs.getString('languageCode') ?? 'en';
-    _locale = Locale(languageCode);
+    _locale = Locale(prefs.getString('languageCode') ?? 'en');
+    _inactivityTimeoutEnabled = prefs.getBool('inactivityTimeoutEnabled') ?? true;
+    _recordOnForegroundEnabled = prefs.getBool('recordOnForegroundEnabled') ?? true;
     notifyListeners();
   }
 
@@ -133,9 +132,38 @@ class SettingsProvider with ChangeNotifier {
     await prefs.setString('languageCode', locale.languageCode);
     notifyListeners();
   }
+
+  Future<void> setInactivityTimeoutEnabled(bool enabled) async {
+    _inactivityTimeoutEnabled = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('inactivityTimeoutEnabled', enabled);
+    notifyListeners();
+  }
+
+  Future<void> setRecordOnForegroundEnabled(bool enabled) async {
+    _recordOnForegroundEnabled = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('recordOnForegroundEnabled', enabled);
+    notifyListeners();
+  }
 }
 
+
 // --- Widgets ---
+
+class AppLifecycleObserver extends WidgetsBindingObserver {
+  final Function onResumed;
+
+  AppLifecycleObserver({required this.onResumed});
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      onResumed();
+    }
+  }
+}
+
 class LocationCard extends StatelessWidget {
   final LocationRecord record;
   final int index;
@@ -145,7 +173,7 @@ class LocationCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final settings = Provider.of<SettingsProvider>(context);
-    final dateFormat = DateFormat('MMM d, yyyy - hh:mm:ss a');
+    final dateFormat = DateFormat('MMM d, yyyy - hh:mm:ss a', settings.locale.languageCode);
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
@@ -165,20 +193,23 @@ class LocationCard extends StatelessWidget {
   void _launchMap(BuildContext context, Locale locale) async {
     final lat = record.latitude;
     final lon = record.longitude;
-    final Uri url;
 
     if (Platform.isAndroid && locale.languageCode == 'zh') {
-        url = Uri.parse('androidamap://viewMap?sourceApplication=location_tracker&poiname=My Location&lat=$lat&lon=$lon&dev=1');
-         if (await canLaunchUrl(url)) {
-            await launchUrl(url);
-        } else {
-            // Fallback to Google Maps if Amap is not available
-            final fallbackUrl = Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lon');
-            await launchUrl(fallbackUrl);
-        }
+      try {
+        final intent = AndroidIntent(
+          action: 'action_view',
+          data: Uri.parse('androidamap://viewMap?sourceApplication=location_tracker&poiname=My Location&lat=$lat&lon=$lon&dev=1').toString(),
+          package: 'com.autonavi.minimap',
+        );
+        await intent.launch();
+      } catch (e) {
+        // Fallback to browser if Amap is not installed or launch fails
+        final fallbackUrl = Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lon');
+        await launchUrl(fallbackUrl, mode: LaunchMode.externalApplication);
+      }
     } else {
-      url = Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lon');
-      await launchUrl(url);
+      final url = Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lon');
+      await launchUrl(url, mode: LaunchMode.externalApplication);
     }
   }
 }
@@ -192,24 +223,41 @@ class HomeScreen extends StatefulWidget {
 
 class HomeScreenState extends State<HomeScreen> {
   Timer? _exitTimer;
+  late AppLifecycleObserver _lifecycleObserver;
 
   @override
   void initState() {
     super.initState();
-    _startExitTimer();
+    final settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
+
+    if (settingsProvider.inactivityTimeoutEnabled) {
+      _startExitTimer();
+    }
+    
+    _lifecycleObserver = AppLifecycleObserver(
+      onResumed: () {
+        if (Provider.of<SettingsProvider>(context, listen: false).recordOnForegroundEnabled) {
+          _recordLocation();
+        }
+      },
+    );
+    WidgetsBinding.instance.addObserver(_lifecycleObserver);
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _recordLocation();
+      if (mounted) _recordLocation();
     });
   }
 
   @override
   void dispose() {
     _exitTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(_lifecycleObserver);
     super.dispose();
   }
 
   void _startExitTimer() {
-    _exitTimer = Timer(const Duration(minutes: 5), () {
+    _exitTimer?.cancel(); // Cancel any existing timer
+    _exitTimer = Timer(const Duration(seconds: 10), () {
       if (mounted) {
         exit(0);
       }
@@ -217,39 +265,41 @@ class HomeScreenState extends State<HomeScreen> {
   }
 
   void _cancelExitTimer() {
-    if (_exitTimer?.isActive ?? false) {
-      _exitTimer!.cancel();
-    }
+    _exitTimer?.cancel();
+  }
+  
+  void _handleUserInteraction([_]) {
+      final settings = Provider.of<SettingsProvider>(context, listen: false);
+      if(settings.inactivityTimeoutEnabled) {
+        _startExitTimer();
+      }
   }
 
   Future<void> _recordLocation() async {
     final hasPermission = await _handleLocationPermission();
-    if (!mounted) return;
-    if (!hasPermission) return;
+    if (!mounted || !hasPermission) return;
 
     try {
-      final position = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
-      if(mounted){
+      final position = await Geolocator.getCurrentPosition(locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
+      if (mounted) {
         Provider.of<LocationProvider>(context, listen: false).addRecord(position);
       }
     } catch (e) {
-        if(mounted){
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error getting location: $e')));
-        }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error getting location: $e')));
+      }
     }
   }
 
   Future<bool> _handleLocationPermission() async {
-    bool serviceEnabled;
+    bool serviceEnabled; 
     LocationPermission permission;
 
     serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      if(mounted){
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text(
-              'Location services are disabled. Please enable the services')));
+            content: Text('Location services are disabled. Please enable the services')));
       }
       return false;
     }
@@ -257,39 +307,76 @@ class HomeScreenState extends State<HomeScreen> {
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
-        if(mounted){
+        if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Location permissions are denied')));
+              const SnackBar(content: Text('Location permissions are denied')));
         }
         return false;
       }
     }
     if (permission == LocationPermission.deniedForever) {
-       if(mounted){
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text(
-              'Location permissions are permanently denied, we cannot request permissions.')));
-       }
+            content: Text('Location permissions are permanently denied, we cannot request permissions.')));
+      }
       return false;
     }
     return true;
   }
 
   Future<void> _selectDate(BuildContext context) async {
-    final locationProvider =
-        Provider.of<LocationProvider>(context, listen: false);
+    final locationProvider = Provider.of<LocationProvider>(context, listen: false);
+    final settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
+
     final DateTime? picked = await showDatePicker(
       context: context,
       initialDate: locationProvider.selectedDate,
       firstDate: DateTime(2000),
       lastDate: DateTime(2101),
+      locale: settingsProvider.locale,
     );
-    // Pass the picked date to the provider. It can be null.
-    if(mounted){
+    if (picked != null) {
       locationProvider.selectDate(picked);
     }
-    
   }
+
+  void _showSettingsModal(BuildContext context) {
+    final settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
+
+    showModalBottomSheet(
+      context: context,
+      builder: (context) {
+        return Consumer<SettingsProvider>(
+          builder: (context, settings, child) {
+            return Wrap(
+              children: [
+                SwitchListTile(
+                  title: Text(settings.locale.languageCode == 'zh' ? '10秒无操作自动退出' : 'Auto-exit after 10s inactivity'),
+                  value: settings.inactivityTimeoutEnabled,
+                  onChanged: (bool value) {
+                    settings.setInactivityTimeoutEnabled(value);
+                    if(value) {
+                        _startExitTimer();
+                    } else {
+                        _cancelExitTimer();
+                    }
+                  },
+                ),
+                SwitchListTile(
+                  title: Text(settings.locale.languageCode == 'zh' ? '回到前台自动记录' : 'Record location on app resume'),
+                  value: settings.recordOnForegroundEnabled,
+                  onChanged: (bool value) {
+                    settings.setRecordOnForegroundEnabled(value);
+                  },
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -297,7 +384,7 @@ class HomeScreenState extends State<HomeScreen> {
     final settingsProvider = Provider.of<SettingsProvider>(context);
 
     return Listener(
-      onPointerDown: (_) => _cancelExitTimer(),
+      onPointerDown: _handleUserInteraction,
       child: Scaffold(
         appBar: AppBar(
           title: Text(settingsProvider.locale.languageCode == 'zh'
@@ -305,10 +392,9 @@ class HomeScreenState extends State<HomeScreen> {
               : 'Location History'),
           actions: [
             IconButton(
-                icon: const Icon(Icons.calendar_today),
-                onPressed: () => _selectDate(context),
+              icon: const Icon(Icons.calendar_today),
+              onPressed: () => _selectDate(context),
             ),
-             // Add a button to clear the date filter
             IconButton(
               icon: const Icon(Icons.clear_all),
               tooltip: 'Show all records',
@@ -326,10 +412,13 @@ class HomeScreenState extends State<HomeScreen> {
               },
             ),
             IconButton(
+                icon: const Icon(Icons.settings),
+                onPressed: () => _showSettingsModal(context),
+            ),
+            IconButton(
               icon: const Icon(Icons.delete),
               onPressed: () {
-                Provider.of<LocationProvider>(context, listen: false)
-                    .clearRecords();
+                Provider.of<LocationProvider>(context, listen: false).clearRecords();
               },
             ),
           ],
@@ -360,12 +449,10 @@ class HomeScreenState extends State<HomeScreen> {
 // --- Main App ---
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // It's better to create all providers before the app runs
+
   final settingsProvider = SettingsProvider();
   await settingsProvider.loadSettings();
   final locationProvider = LocationProvider();
-  // No need to await loadRecords, it will notify listeners when done.
 
   runApp(
     MultiProvider(
@@ -392,7 +479,9 @@ class MyApp extends StatelessWidget {
       themeMode: ThemeMode.system,
       locale: settings.locale,
       localizationsDelegates: const [
-        // Add required delegates if you have them, e.g., for intl
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
       ],
       supportedLocales: const [Locale('en', ''), Locale('zh', '')],
       home: const HomeScreen(),
