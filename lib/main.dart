@@ -53,7 +53,8 @@ class LocationProvider with ChangeNotifier {
     _allRecords = recordsJson
         .map((json) => LocationRecord.fromJson(jsonDecode(json)))
         .toList();
-    _filteredRecords = List.from(_allRecords);
+    // Initially, show all records unfiltered.
+    _filterRecordsByDate(null);
     notifyListeners();
   }
 
@@ -65,7 +66,7 @@ class LocationProvider with ChangeNotifier {
     );
     _allRecords.add(record);
     _updateStorageIncrementally(record);
-    _filterRecordsByDate();
+    _filterRecordsByDate(_selectedDate);
     notifyListeners();
   }
 
@@ -89,14 +90,14 @@ class LocationProvider with ChangeNotifier {
   }
 
   void selectDate(DateTime? date) {
-    _selectedDate = date;
-    _filterRecordsByDate();
+    _filterRecordsByDate(date);
     notifyListeners();
   }
 
-  void _filterRecordsByDate() {
+  void _filterRecordsByDate(DateTime? date) {
+    _selectedDate = date;
     if (_selectedDate == null) {
-      _filteredRecords = List.from(_allRecords);
+       _filteredRecords = List.from(_allRecords);
     } else {
       final selected = _selectedDate!;
       _filteredRecords = _allRecords
@@ -223,6 +224,7 @@ class HomeScreen extends StatefulWidget {
 
 class HomeScreenState extends State<HomeScreen> {
   Timer? _exitTimer;
+  bool _isExitTimerArmed = false;
   late AppLifecycleObserver _lifecycleObserver;
 
   @override
@@ -231,7 +233,7 @@ class HomeScreenState extends State<HomeScreen> {
     final settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
 
     if (settingsProvider.inactivityTimeoutEnabled) {
-      _startExitTimer();
+      _armAndStartExitTimer();
     }
     
     _lifecycleObserver = AppLifecycleObserver(
@@ -255,8 +257,9 @@ class HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  void _startExitTimer() {
-    _exitTimer?.cancel(); // Cancel any existing timer
+  void _armAndStartExitTimer() {
+    _isExitTimerArmed = true;
+    _exitTimer?.cancel();
     _exitTimer = Timer(const Duration(seconds: 10), () {
       if (mounted) {
         exit(0);
@@ -264,14 +267,14 @@ class HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  void _cancelExitTimer() {
+  void _disarmAndCancelExitTimer() {
     _exitTimer?.cancel();
+    _isExitTimerArmed = false;
   }
   
   void _handleUserInteraction([_]) {
-      final settings = Provider.of<SettingsProvider>(context, listen: false);
-      if(settings.inactivityTimeoutEnabled) {
-        _startExitTimer();
+      if (_isExitTimerArmed) {
+        _disarmAndCancelExitTimer();
       }
   }
 
@@ -335,8 +338,14 @@ class HomeScreenState extends State<HomeScreen> {
       lastDate: DateTime(2101),
       locale: settingsProvider.locale,
     );
+
+    // If a date is picked, filter by it. If user cancels, picked is null.
+    // A null date in selectDate means 'show all'.
     if (picked != null) {
       locationProvider.selectDate(picked);
+    } else {
+      // If user cancels the date picker, show all records.
+      locationProvider.selectDate(null);
     }
   }
 
@@ -356,9 +365,9 @@ class HomeScreenState extends State<HomeScreen> {
                   onChanged: (bool value) {
                     settings.setInactivityTimeoutEnabled(value);
                     if(value) {
-                        _startExitTimer();
+                        _armAndStartExitTimer();
                     } else {
-                        _cancelExitTimer();
+                        _disarmAndCancelExitTimer();
                     }
                   },
                 ),
@@ -396,13 +405,6 @@ class HomeScreenState extends State<HomeScreen> {
               onPressed: () => _selectDate(context),
             ),
             IconButton(
-              icon: const Icon(Icons.clear_all),
-              tooltip: 'Show all records',
-              onPressed: () {
-                locationProvider.selectDate(null);
-              },
-            ),
-            IconButton(
               icon: const Icon(Icons.language),
               onPressed: () {
                 final newLocale = settingsProvider.locale.languageCode == 'en'
@@ -431,9 +433,11 @@ class HomeScreenState extends State<HomeScreen> {
             : ListView.builder(
                 itemCount: locationProvider.records.length,
                 itemBuilder: (context, index) {
+                  final records = locationProvider.records;
+                  final recordIndex = records.length - 1 - index;
                   return LocationCard(
-                    record: locationProvider.records[index],
-                    index: index,
+                    record: records[recordIndex],
+                    index: recordIndex,
                   );
                 },
               ),
