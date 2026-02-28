@@ -210,11 +210,13 @@ class LocationCard extends StatelessWidget {
     if (Platform.isAndroid && locale.languageCode == 'zh') {
       try {
         final poiname = Uri.encodeComponent('我的位置');
+        final String amapDataString = 
+            'androidamap://viewMap?sourceApplication=location_tracker&poiname=$poiname&lat=$lat&lon=$lon&dev=1';
+
         final intent = AndroidIntent(
-          action: 'action_view',
-          data: Uri.parse(
-                  'androidamap://viewMap?sourceApplication=location_tracker&poiname=$poiname&lat=$lat&lon=$lon&dev=1')
-              .toString(),
+          action: 'android.intent.action.VIEW',
+          category: 'android.intent.category.DEFAULT',
+          data: amapDataString,
           package: 'com.autonavi.minimap',
         );
         await intent.launch();
@@ -369,7 +371,6 @@ class HomeScreenState extends State<HomeScreen> {
   }
 
   void _showSettingsModal(BuildContext context) {
-    final settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
 
     showModalBottomSheet(
       context: context,
