@@ -11,6 +11,9 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
+
 
 // --- Providers ---
 
@@ -175,42 +178,64 @@ class AppLifecycleObserver extends WidgetsBindingObserver {
   }
 }
 
-class LocationCard extends StatelessWidget {
+class LocationRecordCard extends StatefulWidget {
   final LocationRecord record;
   final int index;
 
-  const LocationCard({super.key, required this.record, required this.index});
+  const LocationRecordCard({super.key, required this.record, required this.index});
 
   @override
-  Widget build(BuildContext context) {
-    final settings = Provider.of<SettingsProvider>(context);
-    final dateFormat =
-        DateFormat('MMM d, yyyy - hh:mm:ss a', settings.locale.languageCode);
-    final precision = settings.gpsPrecision;
+  State<LocationRecordCard> createState() => _LocationRecordCardState();
+}
 
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
-      child: ListTile(
-        leading: CircleAvatar(
-          child: Text('${index + 1}'),
-        ),
-        title: Text(dateFormat.format(record.timestamp)),
-        subtitle: Text(settings.locale.languageCode == 'zh'
-            ? '纬度: ${record.latitude.toStringAsFixed(precision)}, 经度: ${record.longitude.toStringAsFixed(precision)}'
-            : 'Lat: ${record.latitude.toStringAsFixed(precision)}, Lon: ${record.longitude.toStringAsFixed(precision)}'),
-        onTap: () => _launchMap(context, settings.locale),
-      ),
-    );
+class _LocationRecordCardState extends State<LocationRecordCard> {
+  late Future<String> _bluetoothStatusFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _bluetoothStatusFuture = _getBluetoothStatus();
+  }
+
+  Future<String> _getBluetoothStatus() async {
+    // 1. 检查蓝牙开关
+    if (await FlutterBluePlus.adapterState.first != BluetoothAdapterState.on) {
+      return 'Bluetooth Off';
+    }
+
+    // 2. 权限检查
+    var status = await Permission.bluetoothConnect.request();
+    if (!status.isGranted) {
+      return 'Bluetooth permission denied.';
+    }
+
+    try {
+      // 💡 修复关键：添加括号 () 并传入参数 []
+      // systemDevices 现在是一个方法，必须调用它
+      var systemDevices = await FlutterBluePlus.systemDevices([]); 
+
+      if (systemDevices.isEmpty) {
+        return 'No connected devices';
+      }
+
+      final deviceNames = systemDevices
+          .map((d) => d.platformName.isNotEmpty ? d.platformName : d.remoteId.toString())
+          .toList();
+
+      return 'Connected: ${deviceNames.join(', ')}';
+    } catch (e) {
+      return 'Error: $e';
+    }
   }
 
   void _launchMap(BuildContext context, Locale locale) async {
-    final lat = record.latitude;
-    final lon = record.longitude;
+    final lat = widget.record.latitude;
+    final lon = widget.record.longitude;
 
     if (Platform.isAndroid && locale.languageCode == 'zh') {
       try {
         final poiname = Uri.encodeComponent('我的位置');
-        final String amapDataString = 
+        final String amapDataString =
             'androidamap://viewMap?sourceApplication=device_tracer&poiname=$poiname&lat=$lat&lon=$lon&dev=1';
 
         final intent = AndroidIntent(
@@ -231,6 +256,45 @@ class LocationCard extends StatelessWidget {
           Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lon');
       await launchUrl(url, mode: LaunchMode.externalApplication);
     }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final settings = Provider.of<SettingsProvider>(context);
+    final dateFormat =
+        DateFormat('MMM d, yyyy - hh:mm:ss a', settings.locale.languageCode);
+    final precision = settings.gpsPrecision;
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
+      child: ListTile(
+        leading: CircleAvatar(
+          child: Text('${widget.index + 1}'),
+        ),
+        title: Text(dateFormat.format(widget.record.timestamp)),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(settings.locale.languageCode == 'zh'
+                ? '纬度: ${widget.record.latitude.toStringAsFixed(precision)}, 经度: ${widget.record.longitude.toStringAsFixed(precision)}'
+                : 'Lat: ${widget.record.latitude.toStringAsFixed(precision)}, Lon: ${widget.record.longitude.toStringAsFixed(precision)}'),
+            FutureBuilder<String>(
+              future: _bluetoothStatusFuture,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Text('Checking Bluetooth...', style: TextStyle(color: Colors.grey));
+                } else if (snapshot.hasError) {
+                  return Text('Error: ${snapshot.error}', style: const TextStyle(color: Colors.red));
+                } else {
+                  return Text(snapshot.data ?? 'Unknown status', style: TextStyle(color: Theme.of(context).colorScheme.secondary));
+                }
+              },
+            ),
+          ],
+        ),
+        onTap: () => _launchMap(context, settings.locale),
+      ),
+    );
   }
 }
 
@@ -294,7 +358,7 @@ class HomeScreenState extends State<HomeScreen> {
 
   void _handleUserInteraction([_]) {
     if (_isExitTimerArmed) {
-      _disarmAndCancelExitTimer();
+      _armAndStartExitTimer();
     }
   }
 
@@ -467,7 +531,7 @@ class HomeScreenState extends State<HomeScreen> {
                 itemBuilder: (context, index) {
                   final records = locationProvider.records;
                   final recordIndex = records.length - 1 - index;
-                  return LocationCard(
+                  return LocationRecordCard(
                     record: records[recordIndex],
                     index: recordIndex,
                   );
