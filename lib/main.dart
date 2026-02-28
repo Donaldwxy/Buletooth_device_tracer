@@ -211,7 +211,7 @@ class LocationCard extends StatelessWidget {
       try {
         final poiname = Uri.encodeComponent('我的位置');
         final String amapDataString = 
-            'androidamap://viewMap?sourceApplication=location_tracker&poiname=$poiname&lat=$lat&lon=$lon&dev=1';
+            'androidamap://viewMap?sourceApplication=device_tracer&poiname=$poiname&lat=$lat&lon=$lon&dev=1';
 
         final intent = AndroidIntent(
           action: 'android.intent.action.VIEW',
