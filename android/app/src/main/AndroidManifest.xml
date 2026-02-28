@@ -1,7 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="myapp"
+        android:label="device_tracer"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
